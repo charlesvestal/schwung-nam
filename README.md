@@ -4,7 +4,7 @@ Neural Amp Modeler audio effect module for Move Everything, based on [NeuralAudi
 
 ## Prerequisites
 
-- [Move Everything](https://github.com/charlesvestal/move-anything) installed on your Ableton Move
+- [Move Everything](https://github.com/charlesvestal/move-everything) installed on your Ableton Move
 
 ## Installation
 
