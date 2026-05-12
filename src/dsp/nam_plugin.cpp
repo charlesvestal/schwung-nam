@@ -557,10 +557,106 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
     }
 }
 
+/* Minimal JSON field readers for state restore — encoder writes a flat
+ * {"key":value,...} object so strstr + atof/sscanf is enough. */
+static int nam_json_get_float(const char *json, const char *key, float *out) {
+    if (!json || !key || !out) return -1;
+    char search[64];
+    int n = snprintf(search, sizeof(search), "\"%s\":", key);
+    if (n <= 0 || n >= (int)sizeof(search)) return -1;
+    const char *p = strstr(json, search);
+    if (!p) return -1;
+    p += n;
+    while (*p == ' ' || *p == '\t') p++;
+    *out = (float)atof(p);
+    return 0;
+}
+
+static int nam_json_get_int(const char *json, const char *key, int *out) {
+    if (!json || !key || !out) return -1;
+    char search[64];
+    int n = snprintf(search, sizeof(search), "\"%s\":", key);
+    if (n <= 0 || n >= (int)sizeof(search)) return -1;
+    const char *p = strstr(json, search);
+    if (!p) return -1;
+    p += n;
+    while (*p == ' ' || *p == '\t') p++;
+    *out = atoi(p);
+    return 0;
+}
+
+static int nam_json_get_string(const char *json, const char *key,
+                               char *out, int out_len) {
+    if (!json || !key || !out || out_len <= 0) return -1;
+    char search[64];
+    int n = snprintf(search, sizeof(search), "\"%s\":\"", key);
+    if (n <= 0 || n >= (int)sizeof(search)) return -1;
+    const char *p = strstr(json, search);
+    if (!p) return -1;
+    p += n;
+    int i = 0;
+    while (*p && *p != '"' && i < out_len - 1) {
+        if (*p == '\\' && p[1]) { out[i++] = p[1]; p += 2; continue; }
+        out[i++] = *p++;
+    }
+    out[i] = '\0';
+    return i;
+}
+
+/* Look up an entry in a sorted name list (model or cab) by exact name.
+ * Returns the index or -1 if not found. */
+static int nam_find_name(char names[][MAX_NAME_LEN], int count,
+                         const char *target) {
+    if (!target || !target[0]) return -1;
+    for (int i = 0; i < count; i++) {
+        if (strcmp(names[i], target) == 0) return i;
+    }
+    return -1;
+}
+
 /* --- set_param --- */
 static void v2_set_param(void *instance, const char *key, const char *val) {
     nam_instance_t *inst = (nam_instance_t *)instance;
     if (!inst || !key || !val) return;
+
+    /* Bulk state restore from get_param("state"). Match by saved name
+     * first (survives reordering after rescans), fall back to index.
+     * Required for slot autosave round-trip — without this the host
+     * silently bails on fx:state empty and drops the slot save. */
+    if (strcmp(key, "state") == 0) {
+        float f;
+        int   i;
+        char  name[MAX_NAME_LEN];
+        if (nam_json_get_float(val, "input_level", &f) == 0) {
+            inst->input_level = clampf(f, 0.0f, 1.0f);
+            inst->input_gain  = knob_to_gain(inst->input_level);
+        }
+        if (nam_json_get_float(val, "output_level", &f) == 0) {
+            inst->output_level = clampf(f, 0.0f, 1.0f);
+            inst->output_gain  = knob_to_gain(inst->output_level);
+        }
+        /* Model: prefer name (resilient to scan reorder), fall back to idx. */
+        int target_model = -1;
+        if (nam_json_get_string(val, "model_name", name, sizeof(name)) > 0)
+            target_model = nam_find_name(inst->model_names, inst->model_count, name);
+        if (target_model < 0 && nam_json_get_int(val, "model_index", &i) == 0)
+            if (i >= 0 && i < inst->model_count) target_model = i;
+        if (target_model >= 0 && target_model != inst->current_model_index) {
+            inst->current_model_index = target_model;
+            load_model_async(inst, inst->model_paths[target_model]);
+        }
+        /* Cab: same name-first / index-fallback pattern. */
+        int target_cab = -1;
+        if (nam_json_get_string(val, "cab_name", name, sizeof(name)) > 0)
+            target_cab = nam_find_name(inst->cab_names, inst->cab_count, name);
+        if (target_cab < 0 && nam_json_get_int(val, "cab_index", &i) == 0)
+            if (i >= 0 && i < inst->cab_count) target_cab = i;
+        if (target_cab >= 0 && target_cab != inst->current_cab_index)
+            load_cab(inst, target_cab);
+        if (nam_json_get_int(val, "cab_bypass", &i) == 0)
+            inst->cab_bypass = (i != 0);
+        return;
+    }
 
     if (strcmp(key, "input_level") == 0) {
         inst->input_level = clampf(atof(val), 0.0f, 1.0f);
@@ -594,6 +690,21 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
 static int v2_get_param(void *instance, const char *key, char *buf, int buf_len) {
     nam_instance_t *inst = (nam_instance_t *)instance;
     if (!inst || !key || !buf) return -1;
+
+    /* Bulk serialization for slot autosave. Persists both name and index
+     * for model/cab so restore can survive directory rescans (name match
+     * wins, index is a fallback). */
+    if (strcmp(key, "state") == 0) {
+        return snprintf(buf, buf_len,
+            "{\"input_level\":%.4f,\"output_level\":%.4f,"
+            "\"model_index\":%d,\"model_name\":\"%s\","
+            "\"cab_index\":%d,\"cab_name\":\"%s\","
+            "\"cab_bypass\":%d}",
+            inst->input_level, inst->output_level,
+            inst->current_model_index, inst->model_name,
+            inst->current_cab_index, inst->cab_name,
+            inst->cab_bypass ? 1 : 0);
+    }
 
     if (strcmp(key, "input_level") == 0)
         return snprintf(buf, buf_len, "%.2f", inst->input_level);
