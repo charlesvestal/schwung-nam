@@ -99,7 +99,7 @@
     ],
     "description": "Manage NAM models (.nam) and cabinet IRs (.wav)",
     "hint": "Find amp models at",
-    "hint_url": "https://tonehunt.org",
-    "hint_url_label": "ToneHunt"
+    "hint_url": "https://tone3000.com",
+    "hint_url_label": "TONE3000"
   }
 }
