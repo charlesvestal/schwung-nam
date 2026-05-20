@@ -141,10 +141,17 @@ cat src/module.json > dist/nam/module.json
 cat build/nam.so > dist/nam/nam.so
 chmod +x dist/nam/nam.so
 
-# Include bundled models if any exist
+# Always create models/ and cabs/ in the tarball so the Module Store install
+# lands the expected directory layout. Existing files are preserved on extract;
+# tar only overwrites same-named files (these dirs are empty by default).
+mkdir -p dist/nam/models dist/nam/cabs
+
+# Include any bundled models/cabs shipped in the repo
 if [ -d "src/models" ] && [ "$(ls -A src/models 2>/dev/null)" ]; then
-    mkdir -p dist/nam/models
     cp src/models/* dist/nam/models/
+fi
+if [ -d "src/cabs" ] && [ "$(ls -A src/cabs 2>/dev/null)" ]; then
+    cp src/cabs/* dist/nam/cabs/
 fi
 
 # Create tarball for release
