@@ -1,12 +1,42 @@
-# NAM models
+# Bundled NAM models
 
-This folder is intentionally empty. Drop `.nam` model files in here and they'll
-appear in the NAM module's "Choose Model" picker.
+This folder ships 30 starter captures spanning clean, vintage, crunch, lead,
+metal, fuzz, distortion, overdrive, boost, and bass tones. Drop your own
+`.nam` files alongside — they'll appear in the "Choose Model" picker too.
 
-## Where to find models
+## License
 
-- <https://tone3000.com> — community captures, NAM models and IRs side by side.
+**All bundled models are GPL-3.0**, sourced from
+[`pelennor2170/NAM_models`](https://github.com/pelennor2170/NAM_models).
+The full license text is in `GPL-3.0.txt` next to this README.
 
-Check the per-model license before redistributing. Most TONE3000 uploads default
-to the "T3K" license — you can use them freely in your patches, but you can't
-republish the model file itself without the author's permission.
+The plugin binary (`nam.so`) and the rest of the module are MIT-licensed.
+This directory is an "aggregate" under GPL-3 § 5 — keep `GPL-3.0.txt` and
+the `.nam` files together when redistributing.
+
+## Attribution
+
+Captures were made by community contributors and collected by pelennor2170.
+Original captures by filename prefix:
+
+| Captures | Contributor |
+|---|---|
+| `George B …` | George B |
+| `Helga B …` | Helga B (Helga Behrens) |
+| `Jason Z …` | Jason Z |
+| `Keith B …` | Keith B |
+| `Luis R …` | Luis R |
+| `Mikhail K …` | Mikhail K |
+| `Peter N …` | Peter N |
+| `Phillipe P …` | Phillipe P |
+| `Roman A …` | Roman A |
+| `Sascha S …` | Sascha S |
+| `Tim R …` | Tim R |
+| `Tom C …` | Tom C |
+| `Tudor N …` | Tudor N |
+
+## Finding more
+
+Browse community captures at <https://tone3000.com>. Most uploads default to
+the "T3K" license — usable in your patches, but not redistributable without
+the author's permission. Check the per-model terms.
