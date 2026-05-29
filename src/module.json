@@ -2,7 +2,7 @@
   "id": "nam",
   "name": "NAM",
   "abbrev": "NA",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Neural Amp Modeler - neural network guitar amp/effect emulation",
   "author": "NeuralAudio by Mike Oliphant (port: charlesvestal)",
   "license": "MIT",
