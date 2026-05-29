@@ -47,8 +47,10 @@ cd "$REPO_ROOT"
 echo "=== Building NAM Module ==="
 echo "Cross prefix: $CROSS_PREFIX"
 
-# Create build directories
+# Create build directories. Wipe dist/nam first so stale files from a
+# previous build (e.g. removed/renamed models) don't get repackaged.
 mkdir -p build/neuralaudio
+rm -rf dist/nam
 mkdir -p dist/nam
 
 # --- Phase 1: Build NeuralAudio static library via CMake ---
