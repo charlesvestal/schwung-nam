@@ -17,23 +17,11 @@ the `.nam` files together when redistributing.
 ## Attribution
 
 Captures were made by community contributors and collected by pelennor2170.
-Original captures by filename prefix:
+Each filename ends with the contributor in parentheses, e.g.
+`JCM2000 Crunch (Tim R).nam`. Contributors bundled here:
 
-| Captures | Contributor |
-|---|---|
-| `George B …` | George B |
-| `Helga B …` | Helga B (Helga Behrens) |
-| `Jason Z …` | Jason Z |
-| `Keith B …` | Keith B |
-| `Luis R …` | Luis R |
-| `Mikhail K …` | Mikhail K |
-| `Peter N …` | Peter N |
-| `Phillipe P …` | Phillipe P |
-| `Roman A …` | Roman A |
-| `Sascha S …` | Sascha S |
-| `Tim R …` | Tim R |
-| `Tom C …` | Tom C |
-| `Tudor N …` | Tudor N |
+George B · Helga B (Helga Behrens) · Jason Z · Keith B · Luis R ·
+Mikhail K · Peter N · Phillipe P · Sascha S · Tim R · Tom C · Tudor N
 
 ## Finding more
 
