@@ -20,6 +20,7 @@
             "output_level",
             {
               "key": "cab_bypass",
+              "short_name": "Bypass",
               "label": "Cab Bypass"
             },
             {
