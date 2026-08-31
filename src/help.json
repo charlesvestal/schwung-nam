@@ -19,18 +19,19 @@
     {
       "title": "Setup",
       "lines": [
-        "Upload .nam model",
-        "files to models/",
+        "Copy .nam model",
+        "files into models/",
         "and .wav cabinet IRs",
-        "to cabs/ via the ME",
-        "Installer's asset",
-        "copy feature.",
+        "into cabs/ using the",
+        "Schwung manager at",
+        "move.local:7700.",
         "",
-        "Find models at:",
-        "tonehunt.org",
+        "Find amp models at:",
+        "tone3000.com",
         "",
-        "Supports folders",
-        "for organization."
+        "Subfolders are",
+        "supported for",
+        "organization."
       ]
     },
     {
