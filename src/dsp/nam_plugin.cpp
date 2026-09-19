@@ -162,6 +162,13 @@ typedef struct {
     char model_path[MAX_PATH_LEN];
     char model_name[MAX_NAME_LEN];
 
+    /* Latest requested model path, guarded by req_lock. A request made
+     * while a load is in flight is queued here rather than dropped, so a
+     * state restore arriving during the initial default load still wins. */
+    pthread_mutex_t req_lock;
+    char req_path[MAX_PATH_LEN];
+    bool req_pending;
+
     /* Scanned model files */
     int model_count;
     char model_names[MAX_MODELS][MAX_NAME_LEN];
@@ -371,43 +378,71 @@ static void apply_cab_ir(nam_instance_t *inst, float *audio, int frames) {
     inst->cab_hist_pos = pos;
 }
 
-/* Background model loader thread */
+/* Background model loader thread. Keeps loading until no request is
+ * queued; a model superseded by a newer request mid-load is discarded
+ * instead of published. */
 static void *model_loader_thread(void *arg) {
     nam_instance_t *inst = (nam_instance_t *)arg;
-
+    char path[MAX_PATH_LEN];
     char msg[MAX_PATH_LEN + 64];
-    snprintf(msg, sizeof(msg), "NAM: loading model %s", inst->model_path);
-    plugin_log(msg);
 
-    NeuralAudio::NeuralModel *new_model =
-        NeuralAudio::NeuralModel::CreateFromFile(inst->model_path);
+    for (;;) {
+        pthread_mutex_lock(&inst->req_lock);
+        memcpy(path, inst->req_path, MAX_PATH_LEN);
+        inst->req_pending = false;
+        pthread_mutex_unlock(&inst->req_lock);
 
-    if (new_model) {
-        snprintf(msg, sizeof(msg), "NAM: model loaded successfully (sample_rate=%.0f)",
-                 new_model->GetSampleRate());
+        snprintf(msg, sizeof(msg), "NAM: loading model %s", path);
         plugin_log(msg);
-    } else {
-        snprintf(msg, sizeof(msg), "NAM: failed to load model %s", inst->model_path);
-        plugin_log(msg);
+
+        NeuralAudio::NeuralModel *new_model =
+            NeuralAudio::NeuralModel::CreateFromFile(path);
+
+        if (new_model) {
+            snprintf(msg, sizeof(msg), "NAM: model loaded successfully (sample_rate=%.0f)",
+                     new_model->GetSampleRate());
+            plugin_log(msg);
+        } else {
+            snprintf(msg, sizeof(msg), "NAM: failed to load model %s", path);
+            plugin_log(msg);
+        }
+
+        pthread_mutex_lock(&inst->req_lock);
+        if (inst->req_pending) {
+            pthread_mutex_unlock(&inst->req_lock);
+            delete new_model;
+            plugin_log("NAM: model superseded by a newer request");
+            continue;
+        }
+        if (new_model) {
+            /* The audio thread may not have consumed an earlier publish yet;
+             * it takes with exchange(), so a non-null return is ours to free. */
+            NeuralAudio::NeuralModel *stale =
+                inst->pending_model.exchange(new_model, std::memory_order_acq_rel);
+            delete stale;
+        }
+        inst->loading.store(false, std::memory_order_release);
+        pthread_mutex_unlock(&inst->req_lock);
+        return nullptr;
     }
-
-    inst->pending_model.store(new_model, std::memory_order_release);
-    inst->loading.store(false, std::memory_order_release);
-
-    return nullptr;
 }
 
 static void load_model_async(nam_instance_t *inst, const char *path) {
-    if (inst->loading.load(std::memory_order_acquire)) {
-        plugin_log("NAM: already loading a model, skipping");
-        return;
-    }
+    pthread_mutex_lock(&inst->req_lock);
 
     strncpy(inst->model_path, path, MAX_PATH_LEN - 1);
     inst->model_path[MAX_PATH_LEN - 1] = '\0';
     path_to_name(path, inst->model_name, MAX_NAME_LEN);
+    memcpy(inst->req_path, inst->model_path, MAX_PATH_LEN);
+    inst->req_pending = true;
 
+    /* A running loader picks the queued request up when it finishes. */
+    if (inst->loading.load(std::memory_order_acquire)) {
+        pthread_mutex_unlock(&inst->req_lock);
+        return;
+    }
     inst->loading.store(true, std::memory_order_release);
+    pthread_mutex_unlock(&inst->req_lock);
 
     pthread_t thread;
     pthread_attr_t attr;
@@ -450,6 +485,8 @@ static void* v2_create_instance(const char *module_dir, const char *config_json)
     inst->model = nullptr;
     inst->pending_model.store(nullptr);
     inst->loading.store(false);
+    pthread_mutex_init(&inst->req_lock, nullptr);
+    inst->req_pending = false;
     inst->current_model_index = -1;
 
     /* Cabinet IR defaults */
@@ -504,6 +541,8 @@ static void v2_destroy_instance(void *instance) {
 
     if (inst->model) delete inst->model;
 
+    pthread_mutex_destroy(&inst->req_lock);
+
     /* Clean up cab IR */
     free(inst->cab_ir);
     free(inst->cab_history);
@@ -518,11 +557,11 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
     if (!inst) return;
 
     /* Check for newly loaded model (lock-free swap) */
-    NeuralAudio::NeuralModel *pending = inst->pending_model.load(std::memory_order_acquire);
+    NeuralAudio::NeuralModel *pending =
+        inst->pending_model.exchange(nullptr, std::memory_order_acq_rel);
     if (pending) {
         NeuralAudio::NeuralModel *old = inst->model;
         inst->model = pending;
-        inst->pending_model.store(nullptr, std::memory_order_release);
         if (old) delete old;
     }
 
