@@ -17,7 +17,8 @@ Neural Amp Modeler audio effect module for Move Everything, based on [NeuralAudi
 - **Neural amp/effect modeling**: Run trained NAM models for realistic amp and pedal emulation
 - **Cabinet IR convolution**: Apply cabinet impulse responses with optional bypass
 - **Model browser**: Hierarchical file browser for selecting `.nam` model files
-- **Cabinet browser**: Browse and load `.wav` cabinet IR files
+- **Cabinet browser**: Browse and load `.wav` cabinet IR files, or choose **None** for
+  full-rig models that already include a cabinet (up to 8192-sample IRs, FFT-convolved)
 - **Input/Output level**: Independent gain staging controls
 
 ## Parameters

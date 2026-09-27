@@ -33,6 +33,14 @@ license (see `LICENSE`).
 - **License:** MPL2
 - **How it's used:** Header-only, pulled in transitively via RTNeural.
 
+## PFFFT (cab IR convolution)
+
+- **Project:** [PFFFT](https://bitbucket.org/jpommier/pffft)
+- **Author:** Julien Pommier, based on FFTPACK v4 by Paul Swarztrauber (NCAR)
+- **License:** FFTPACK (BSD-style); full text in the header of `src/dsp/pffft/pffft.c`
+- **How it's used:** Vendored unmodified in `src/dsp/pffft/`, compiled and statically
+  linked into `nam.so`.
+
 ## Bundled NAM models (`src/models/`)
 
 - **Files:** 30 community-contributed `.nam` captures (see
