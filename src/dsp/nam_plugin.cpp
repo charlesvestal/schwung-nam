@@ -6,7 +6,8 @@
  *
  * Includes built-in cabinet impulse response (IR) convolution for amp-only
  * models. Loads mono WAV files from the cabs/ directory and convolves via
- * direct time-domain overlap-save (cab IRs are short, typically <4096 samples).
+ * uniformly partitioned FFT convolution (cab_conv.h) - zero added latency,
+ * cheap enough for the full MAX_IR_LEN. Cabinet "None" turns it off.
  *
  * Dependencies (all header-only / static, permissive licenses):
  *   NeuralAudio  - MIT      - Mike Oliphant
@@ -14,6 +15,7 @@
  *   RTNeural     - BSD-3    - Jatin Chowdhury
  *   math_approx  - BSD-3    - Jatin Chowdhury
  *   nlohmann/json- MIT      - Niels Lohmann
+ *   pffft        - FFTPACK  - Julien Pommier
  *
  * Audio: 44100 Hz, 128 frames/block, stereo interleaved int16 in-place.
  * NAM models are mono - we sum L+R to mono, process, write back to both.
@@ -32,6 +34,8 @@
 
 /* NeuralAudio */
 #include "NeuralAudio/NeuralModel.h"
+
+#include "cab_conv.h"
 
 /* Move Anything API */
 extern "C" {
@@ -169,10 +173,7 @@ typedef struct {
     int current_model_index;
 
     /* Cabinet IR */
-    float *cab_ir;       /* IR samples (heap allocated) */
-    int cab_ir_len;      /* number of IR samples */
-    float *cab_history;  /* circular input buffer for convolution */
-    int cab_hist_pos;    /* write position in circular buffer */
+    cab_conv_t *cab;     /* convolver, nullptr = no cabinet ("None") */
     bool cab_bypass;     /* true = skip convolution */
     char cab_name[MAX_NAME_LEN];
 
@@ -180,7 +181,7 @@ typedef struct {
     int cab_count;
     char cab_names[MAX_CABS][MAX_NAME_LEN];
     char cab_paths[MAX_CABS][MAX_PATH_LEN];
-    int current_cab_index;
+    int current_cab_index;  /* -1 = None */
 
     /* Parameters */
     float input_level;   /* 0.0 - 1.0 knob position */
@@ -308,67 +309,40 @@ static void scan_cabs(nam_instance_t *inst) {
 static void load_cab(nam_instance_t *inst, int index) {
     if (index < 0 || index >= inst->cab_count) return;
 
-    float *new_ir = (float *)calloc(MAX_IR_LEN, sizeof(float));
-    if (!new_ir) return;
+    float *ir = (float *)calloc(MAX_IR_LEN, sizeof(float));
+    if (!ir) return;
 
-    int ir_len = load_wav_ir(inst->cab_paths[index], new_ir, MAX_IR_LEN);
-    if (ir_len <= 0) {
-        free(new_ir);
+    int ir_len = load_wav_ir(inst->cab_paths[index], ir, MAX_IR_LEN);
+    cab_conv_t *conv = ir_len > 0 ? cab_conv_create(ir, ir_len) : nullptr;
+    free(ir);
+    if (!conv) {
         char msg[MAX_PATH_LEN + 64];
         snprintf(msg, sizeof(msg), "NAM: failed to load cab IR %s", inst->cab_paths[index]);
         plugin_log(msg);
         return;
     }
 
-    /* Replace old IR */
-    float *old_ir = inst->cab_ir;
-    float *old_hist = inst->cab_history;
-
-    inst->cab_ir = new_ir;
-    inst->cab_ir_len = ir_len;
+    /* Replace old convolver */
+    cab_conv_t *old = inst->cab;
+    inst->cab = conv;
     inst->current_cab_index = index;
     path_to_name(inst->cab_paths[index], inst->cab_name, MAX_NAME_LEN);
-
-    /* Allocate new history buffer for convolution */
-    inst->cab_history = (float *)calloc(ir_len + FRAMES_PER_BLOCK, sizeof(float));
-    inst->cab_hist_pos = 0;
-
-    free(old_ir);
-    free(old_hist);
+    cab_conv_free(old);
 
     char msg[MAX_PATH_LEN + 64];
-    snprintf(msg, sizeof(msg), "NAM: loaded cab IR '%s' (%d samples)", inst->cab_name, ir_len);
+    snprintf(msg, sizeof(msg), "NAM: loaded cab IR '%s' (%d samples, %d partitions)",
+             inst->cab_name, ir_len, conv->parts);
     plugin_log(msg);
 }
 
-/* Apply cab IR convolution in-place using direct time-domain overlap-save.
- * Circular buffer avoids per-block allocation. */
-static void apply_cab_ir(nam_instance_t *inst, float *audio, int frames) {
-    if (!inst->cab_ir || inst->cab_ir_len <= 0 || !inst->cab_history) return;
-
-    const float *ir = inst->cab_ir;
-    const int ir_len = inst->cab_ir_len;
-    float *hist = inst->cab_history;
-    const int hist_len = ir_len + FRAMES_PER_BLOCK;
-    int pos = inst->cab_hist_pos;
-
-    for (int i = 0; i < frames; i++) {
-        /* Write input sample into circular history */
-        hist[pos] = audio[i];
-
-        /* Convolve: sum of ir[k] * hist[pos-k] for k=0..ir_len-1 */
-        float sum = 0.0f;
-        int p = pos;
-        for (int k = 0; k < ir_len; k++) {
-            sum += ir[k] * hist[p];
-            if (--p < 0) p = hist_len - 1;
-        }
-
-        audio[i] = sum;
-        if (++pos >= hist_len) pos = 0;
-    }
-
-    inst->cab_hist_pos = pos;
+/* Cabinet "None": no convolution at all. */
+static void unload_cab(nam_instance_t *inst) {
+    cab_conv_t *old = inst->cab;
+    inst->cab = nullptr;
+    inst->current_cab_index = -1;
+    inst->cab_name[0] = '\0';
+    cab_conv_free(old);
+    plugin_log("NAM: cab set to None");
 }
 
 /* Background model loader thread */
@@ -453,10 +427,7 @@ static void* v2_create_instance(const char *module_dir, const char *config_json)
     inst->current_model_index = -1;
 
     /* Cabinet IR defaults */
-    inst->cab_ir = nullptr;
-    inst->cab_ir_len = 0;
-    inst->cab_history = nullptr;
-    inst->cab_hist_pos = 0;
+    inst->cab = nullptr;
     inst->cab_bypass = false;
     inst->cab_name[0] = '\0';
     inst->current_cab_index = -1;
@@ -505,8 +476,7 @@ static void v2_destroy_instance(void *instance) {
     if (inst->model) delete inst->model;
 
     /* Clean up cab IR */
-    free(inst->cab_ir);
-    free(inst->cab_history);
+    cab_conv_free(inst->cab);
 
     free(inst);
     plugin_log("NAM: instance destroyed");
@@ -542,9 +512,10 @@ static void v2_process_block(void *instance, int16_t *audio_inout, int frames) {
     /* Process through NAM */
     inst->model->Process(inst->mono_in, inst->mono_out, (size_t)n);
 
-    /* Apply cab IR convolution (if loaded and not bypassed) */
-    if (!inst->cab_bypass && inst->cab_ir) {
-        apply_cab_ir(inst, inst->mono_out, n);
+    /* Apply cab IR convolution (if loaded and not bypassed). The
+     * convolver works in whole CAB_BLOCK blocks - the host's block size. */
+    if (!inst->cab_bypass && inst->cab && n == CAB_BLOCK) {
+        cab_conv_process(inst->cab, inst->mono_out);
     }
 
     /* Convert back to stereo int16 */
@@ -626,7 +597,7 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
     if (strcmp(key, "state") == 0) {
         float f;
         int   i;
-        char  name[MAX_NAME_LEN];
+        char  name[MAX_NAME_LEN] = "";
         if (nam_json_get_float(val, "input_level", &f) == 0) {
             inst->input_level = clampf(f, 0.0f, 1.0f);
             inst->input_gain  = knob_to_gain(inst->input_level);
@@ -645,14 +616,22 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
             inst->current_model_index = target_model;
             load_model_async(inst, inst->model_paths[target_model]);
         }
-        /* Cab: same name-first / index-fallback pattern. */
+        /* Cab: same name-first / index-fallback pattern. A saved index of
+         * -1 with no name is "None" (or no cabs existed when saved) and
+         * must win over the default cab loaded at create time. */
         int target_cab = -1;
+        bool saved_none = false;
+        name[0] = '\0';
         if (nam_json_get_string(val, "cab_name", name, sizeof(name)) > 0)
             target_cab = nam_find_name(inst->cab_names, inst->cab_count, name);
-        if (target_cab < 0 && nam_json_get_int(val, "cab_index", &i) == 0)
+        if (target_cab < 0 && nam_json_get_int(val, "cab_index", &i) == 0) {
             if (i >= 0 && i < inst->cab_count) target_cab = i;
+            else if (i == -1 && !name[0]) saved_none = true;
+        }
         if (target_cab >= 0 && target_cab != inst->current_cab_index)
             load_cab(inst, target_cab);
+        else if (saved_none && inst->current_cab_index != -1)
+            unload_cab(inst);
         if (nam_json_get_int(val, "cab_bypass", &i) == 0)
             inst->cab_bypass = (i != 0);
         return;
@@ -675,7 +654,9 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
         load_model_async(inst, val);
     } else if (strcmp(key, "cab_index") == 0) {
         int idx = atoi(val);
-        if (idx >= 0 && idx < inst->cab_count && idx != inst->current_cab_index) {
+        if (idx == -1 && inst->current_cab_index != -1) {
+            unload_cab(inst);
+        } else if (idx >= 0 && idx < inst->cab_count && idx != inst->current_cab_index) {
             load_cab(inst, idx);
         }
     } else if (strcmp(key, "cab_bypass") == 0) {
@@ -737,7 +718,7 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
 
     /* Cabinet params */
     if (strcmp(key, "cab_name") == 0)
-        return snprintf(buf, buf_len, "%s", inst->cab_name[0] ? inst->cab_name : "(none)");
+        return snprintf(buf, buf_len, "%s", inst->cab_name[0] ? inst->cab_name : "None");
     if (strcmp(key, "cab_count") == 0)
         return snprintf(buf, buf_len, "%d", inst->cab_count);
     if (strcmp(key, "cab_index") == 0)
@@ -745,14 +726,16 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
     if (strcmp(key, "cab_bypass") == 0)
         return snprintf(buf, buf_len, "%d", inst->cab_bypass ? 1 : 0);
 
-    /* Dynamic cab list for Shadow UI browser - rescan each time */
+    /* Dynamic cab list for Shadow UI browser - rescan each time. "None"
+     * leads the list; the browser writes an item's index to cab_index. */
     if (strcmp(key, "cab_list") == 0) {
         scan_cabs(inst);
 
         int written = 0;
-        written += snprintf(buf + written, buf_len - written, "[");
+        written += snprintf(buf + written, buf_len - written,
+                            "[{\"label\":\"None\",\"index\":-1}");
         for (int i = 0; i < inst->cab_count && written < buf_len - 40; i++) {
-            if (i > 0) written += snprintf(buf + written, buf_len - written, ",");
+            written += snprintf(buf + written, buf_len - written, ",");
             written += snprintf(buf + written, buf_len - written,
                 "{\"label\":\"%s\",\"index\":%d}", inst->cab_names[i], i);
         }

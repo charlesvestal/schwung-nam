@@ -105,6 +105,11 @@ fi
 echo "Found NeuralAudio: $NA_LIB"
 echo "Found RTNeural: $RT_LIB"
 
+# pffft (C) for the cab convolver. -O2, not -Ofast: its twiddles and
+# NEON path don't need fast-math, and the IR spectra are built once.
+${CROSS_PREFIX}gcc -O2 -fPIC -march=armv8-a -mtune=cortex-a72 \
+    -c src/dsp/pffft/pffft.c -o build/pffft.o
+
 ${CROSS_PREFIX}g++ -Ofast -shared -fPIC \
     -std=c++20 \
     -march=armv8-a -mtune=cortex-a72 \
@@ -117,6 +122,7 @@ ${CROSS_PREFIX}g++ -Ofast -shared -fPIC \
     -DWAVENET_MAX_NUM_FRAMES=128 \
     -DLAYER_ARRAY_BUFFER_PADDING=8 \
     src/dsp/nam_plugin.cpp \
+    build/pffft.o \
     -o build/nam.so \
     -Isrc/dsp \
     -Ideps/NeuralAudio \
