@@ -49,7 +49,11 @@
         "",
         "Choose Model and",
         "Choose Cabinet via",
-        "the navigation menu."
+        "the navigation menu.",
+        "",
+        "Cabinet None: no IR,",
+        " for models that",
+        " already include a cab"
       ]
     }
   ]
