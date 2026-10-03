@@ -53,6 +53,19 @@ mkdir -p build/neuralaudio
 rm -rf dist/nam
 mkdir -p dist/nam
 
+# --- Unloadability ---
+# glibc pins any DSO that exports an STB_GNU_UNIQUE symbol NODELETE: dlclose
+# never unmaps it. Measured on a Move 2026-10-03: Dexed stayed mapped after
+# unload and a reload reused the replaced, deleted file. g++ emits UNIQUE for
+# statics inside inline functions and inline static data members (Eigen's
+# manage_caching_sizes cache, NeuralAudio::NeuralModel::lstmLoadMode, ...),
+# so every C++ translation unit -- NeuralAudio's CMake build AND nam_plugin.cpp
+# -- is compiled with -fno-gnu-unique, and the static archives' symbols are
+# kept out of .dynsym with --exclude-libs,ALL. The entry point
+# move_audio_fx_init_v2 is defined in nam_plugin.cpp, so it stays exported.
+# Check: readelf -W --dyn-syms nam.so | awk '$5=="UNIQUE"' -> 0.
+NO_UNIQUE_FLAGS="-fno-gnu-unique"
+
 # --- Phase 1: Build NeuralAudio static library via CMake ---
 echo ""
 echo "--- Phase 1: Building NeuralAudio static library ---"
@@ -72,7 +85,7 @@ cmake -S deps/NeuralAudio -B build/neuralaudio \
     -DCMAKE_TOOLCHAIN_FILE="$REPO_ROOT/build/aarch64-toolchain.cmake" \
     -DCMAKE_CXX_STANDARD=20 \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_CXX_FLAGS="-Ofast -march=armv8-a -mtune=cortex-a72 -DNDEBUG" \
+    -DCMAKE_CXX_FLAGS="-Ofast -march=armv8-a -mtune=cortex-a72 -DNDEBUG $NO_UNIQUE_FLAGS" \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DBUILD_UTILS=OFF \
     -DBUILD_NAMCORE=OFF \
@@ -109,6 +122,8 @@ ${CROSS_PREFIX}g++ -Ofast -shared -fPIC \
     -std=c++20 \
     -march=armv8-a -mtune=cortex-a72 \
     -fomit-frame-pointer -fno-stack-protector \
+    $NO_UNIQUE_FLAGS \
+    -Wl,--exclude-libs,ALL \
     -DNDEBUG \
     -DNAM_SAMPLE_FLOAT \
     -DDSP_SAMPLE_FLOAT \
