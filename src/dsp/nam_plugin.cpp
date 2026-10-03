@@ -159,6 +159,12 @@ typedef struct {
     NeuralAudio::NeuralModel *model;
     std::atomic<NeuralAudio::NeuralModel *> pending_model;  /* set by loader thread */
     std::atomic<bool> loading;
+    /* The loader thread is JOINABLE, never detached: destroy_instance must
+     * know it has left this library's code before the host dlclose()s it.
+     * A detached thread could still be in model_loader_thread's epilogue
+     * after storing loading=false, and execute an unmapped page. */
+    pthread_t loader_thread;
+    bool loader_joinable;
     char model_path[MAX_PATH_LEN];
     char model_name[MAX_NAME_LEN];
 
@@ -403,18 +409,26 @@ static void load_model_async(nam_instance_t *inst, const char *path) {
         return;
     }
 
+    /* The previous loader has stored loading=false and is returning; reap it
+     * before reusing the handle. */
+    if (inst->loader_joinable) {
+        pthread_join(inst->loader_thread, nullptr);
+        inst->loader_joinable = false;
+    }
+
     strncpy(inst->model_path, path, MAX_PATH_LEN - 1);
     inst->model_path[MAX_PATH_LEN - 1] = '\0';
     path_to_name(path, inst->model_name, MAX_NAME_LEN);
 
     inst->loading.store(true, std::memory_order_release);
 
-    pthread_t thread;
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    pthread_create(&thread, &attr, model_loader_thread, inst);
-    pthread_attr_destroy(&attr);
+    if (pthread_create(&inst->loader_thread, nullptr, model_loader_thread, inst) == 0) {
+        inst->loader_joinable = true;
+    } else {
+        /* Without this, loading stayed true forever and destroy hung. */
+        inst->loading.store(false, std::memory_order_release);
+        plugin_log("NAM: failed to start model loader thread");
+    }
 }
 
 /* ======================================================================== */
@@ -492,10 +506,11 @@ static void v2_destroy_instance(void *instance) {
     nam_instance_t *inst = (nam_instance_t *)instance;
     if (!inst) return;
 
-    /* Wait for any pending load */
-    while (inst->loading.load(std::memory_order_acquire)) {
-        struct timespec ts = {0, 10000000}; /* 10ms */
-        nanosleep(&ts, nullptr);
+    /* Wait for any pending load AND for the loader thread to have left this
+     * library: the host may dlclose() and unmap us right after we return. */
+    if (inst->loader_joinable) {
+        pthread_join(inst->loader_thread, nullptr);
+        inst->loader_joinable = false;
     }
 
     /* Clean up pending model if never consumed */
