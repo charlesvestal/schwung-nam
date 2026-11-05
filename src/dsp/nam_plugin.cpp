@@ -420,15 +420,16 @@ static void *model_loader_thread(void *arg) {
             plugin_log("NAM: model superseded by a newer request");
             continue;
         }
-        if (new_model) {
-            /* The audio thread may not have consumed an earlier publish yet;
-             * it takes with exchange(), so a non-null return is ours to free. */
-            NeuralAudio::NeuralModel *stale =
-                inst->pending_model.exchange(new_model, std::memory_order_acq_rel);
-            delete stale;
-        }
+        /* The audio thread may not have consumed an earlier publish yet;
+         * it takes with exchange(), so a non-null return is ours to free --
+         * AFTER unlocking: load_model_async takes req_lock on the SPI
+         * callback, and freeing a whole model inside it would block it. */
+        NeuralAudio::NeuralModel *stale = nullptr;
+        if (new_model)
+            stale = inst->pending_model.exchange(new_model, std::memory_order_acq_rel);
         inst->loading.store(false, std::memory_order_release);
         pthread_mutex_unlock(&inst->req_lock);
+        delete stale;
         return nullptr;
     }
 }
