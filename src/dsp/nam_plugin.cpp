@@ -437,13 +437,6 @@ static void *model_loader_thread(void *arg) {
 static void load_model_async(nam_instance_t *inst, const char *path) {
     pthread_mutex_lock(&inst->req_lock);
 
-    /* The previous loader has stored loading=false and is returning; reap it
-     * before reusing the handle. */
-    if (inst->loader_joinable) {
-        pthread_join(inst->loader_thread, nullptr);
-        inst->loader_joinable = false;
-    }
-
     strncpy(inst->model_path, path, MAX_PATH_LEN - 1);
     inst->model_path[MAX_PATH_LEN - 1] = '\0';
     path_to_name(path, inst->model_name, MAX_NAME_LEN);
@@ -457,6 +450,16 @@ static void load_model_async(nam_instance_t *inst, const char *path) {
     }
     inst->loading.store(true, std::memory_order_release);
     pthread_mutex_unlock(&inst->req_lock);
+
+    /* loading was false, so the previous loader has published, unlocked
+     * req_lock and is only returning: reap it before reusing the handle.
+     * NEVER join while holding req_lock -- a loader still running needs the
+     * lock to publish, and this is the SPI callback, so that deadlocks the
+     * device's audio (it did, on a Move, before this was moved here). */
+    if (inst->loader_joinable) {
+        pthread_join(inst->loader_thread, nullptr);
+        inst->loader_joinable = false;
+    }
 
     if (pthread_create(&inst->loader_thread, nullptr, model_loader_thread, inst) == 0) {
         inst->loader_joinable = true;
